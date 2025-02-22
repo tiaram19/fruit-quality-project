@@ -1,43 +1,54 @@
-from flask import Flask, request, render_template
 import os
+import cv2
 import numpy as np
-from tensorflow.keras.models import load_model
-from tensorflow.keras.preprocessing import image
+import tensorflow.lite as tflite
+from flask import Flask, render_template, request, redirect, url_for
 
+# Inisialisasi Flask
 app = Flask(__name__)
-model = load_model("fruit_quality_model.h5")  # Pastikan model sudah dilatih dan disimpan
 
+# Buat folder untuk menyimpan gambar upload jika belum ada
 UPLOAD_FOLDER = "static/uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
-# def predict_fruit(img_path):
-#     img = image.load_img(img_path, target_size=(150, 150))  # Sesuaikan dengan ukuran input model
-#     img_array = image.img_to_array(img)
-#     img_array = np.expand_dims(img_array, axis=0) / 255.0  # Normalisasi
-#     prediction = model.predict(img_array)
-#     return "Segar" if prediction[0][0] > 0.5 else "Busuk"
-def predict_fruit(img_path):
-    img = image.load_img(img_path, target_size=(150, 150))  # Sesuaikan dengan input model
-    img_array = image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0) / 255.0  # Normalisasi
-    prediction = model.predict(img_array)
+# Load model TFLite
+interpreter = tflite.Interpreter(model_path="fruit_quality_model.tflite")
+interpreter.allocate_tensors()
+
+# Ambil indeks input & output
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+def predict_image(image_path):
+    """ Fungsi untuk melakukan prediksi menggunakan model TFLite """
+    image = cv2.imread(image_path)  # Baca gambar dengan OpenCV
+    image = cv2.resize(image, (150, 150))  # Sesuaikan ukuran dengan input model
+    image = np.expand_dims(image, axis=0)  # Tambahkan batch dimension
+    image = image.astype(np.float32) / 255.0  # Normalisasi
+
+    # Masukkan gambar ke model
+    interpreter.set_tensor(input_details[0]['index'], image)
+    interpreter.invoke()
     
-    prob = prediction[0][0]  # Ambil nilai probabilitas
-    print(f"Probabilitas: {prob}")  # Debugging
+    # Ambil hasil prediksi
+    prediction = interpreter.get_tensor(output_details[0]['index'])[0][0]
     
-    return "Segar" if prob < 0.5 else "Busuk"  # Tukar tanda `<` dan `>`
+    return "Segar" if prediction > 0.5 else "Busuk"
 
-
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/", methods=["GET", "POST"])
 def index():
-    if request.method == 'POST':
-        file = request.files['file']
+    if request.method == "POST":
+        file = request.files["file"]
         if file:
-            filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-            file.save(filepath)
-            result = predict_fruit(filepath)
-            return render_template('index.html', result=result, image_path=filepath)
-    return render_template('index.html', result=None, image_path=None)
+            image_path = os.path.join(UPLOAD_FOLDER, file.filename)
+            file.save(image_path)  # Simpan gambar
 
-if __name__ == '__main__':
+            # Prediksi gambar
+            result = predict_image(image_path)
+            
+            return render_template("index.html", image_path=image_path, result=result)
+    return render_template("index.html")
+
+if __name__ == "__main__":
     app.run(debug=True)
